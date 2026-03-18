@@ -1,7 +1,8 @@
 resource "helm_release" "metrics_server" {
   depends_on = [
     data.aws_eks_cluster.main,
-    data.aws_eks_cluster_auth.main
+    data.aws_eks_cluster_auth.main,
+    null_resource.wait_for_cluster
   ]
 
   name       = "metrics-server"
@@ -17,6 +18,8 @@ resource "helm_release" "metrics_server" {
 
 resource "helm_release" "cluster_autoscaler" {
 
+  depends_on = [ null_resource.wait_for_cluster ]
+  
   name       = "cluster-autoscaler"
   repository = "https://kubernetes.github.io/autoscaler"
   chart      = "cluster-autoscaler"
