@@ -1,6 +1,8 @@
 resource "helm_release" "metrics_server" {
-
-  depends_on = [module.eks]
+  depends_on = [
+    data.aws_eks_cluster.main,
+    data.aws_eks_cluster_auth.main
+  ]
 
   name       = "metrics-server"
   repository = "https://kubernetes-sigs.github.io/metrics-server/"
@@ -12,13 +14,8 @@ resource "helm_release" "metrics_server" {
     value = "{--kubelet-insecure-tls}"
   }
 }
-resource "helm_release" "cluster_autoscaler" {
 
-  depends_on = [
-    module.eks,
-    module.cluster_autoscaler_irsa_role,
-    helm_release.metrics_server
-  ]
+resource "helm_release" "cluster_autoscaler" {
 
   name       = "cluster-autoscaler"
   repository = "https://kubernetes.github.io/autoscaler"
@@ -27,7 +24,7 @@ resource "helm_release" "cluster_autoscaler" {
 
   set {
     name  = "autoDiscovery.clusterName"
-    value = module.eks.cluster_name
+    value = aws_eks_cluster.main.name
   }
   set {
     name  = "awsRegion"
@@ -43,6 +40,6 @@ resource "helm_release" "cluster_autoscaler" {
   }
   set {
     name  = "rbac.serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-    value = module.cluster_autoscaler_irsa_role.iam_role_arn
+    value = aws_iam_role.cluster_autoscaler_irsa_role.arn
   }
 }

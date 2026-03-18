@@ -1,44 +1,140 @@
-module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "~> 20.0"
+#-----create cluster role and attached required cluster policy
+resource "aws_iam_role" "cluster" {
+  name = "${var.eks_cluster_name}-cluster-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+    }]
+  })
+}
 
-  cluster_name    = "auto-scale-eks"
-  cluster_version = "1.31"
-  enable_irsa = true
-  enable_cluster_creator_admin_permissions = true
-  cluster_endpoint_public_access = true
+resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.cluster.name
+}
 
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnets
+#---create node group roles and attach required node policies
+resource "aws_iam_role" "nodes" {
+  name = "${var.eks_cluster_name}-node-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
 
-  eks_managed_node_groups = {
-    auto-scale-node = {
-      instance_types = ["t3.medium"]
+resource "aws_iam_role_policy_attachment" "nodes_AmazonEKSWorkerNodePolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.nodes.name
+}
 
-      min_size     = 2
-      max_size     = 4
-      desired_size = 2
+resource "aws_iam_role_policy_attachment" "nodes_AmazonEKS_CNI_Policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.nodes.name
+}
 
-      tags = {
-        "k8s.io/cluster-autoscaler/enabled"   = "true"
-        "k8s.io/cluster-autoscaler/auto-scale-node" = "owned"
+resource "aws_iam_role_policy_attachment" "nodes_AmazonEC2ContainerRegistryReadOnly" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.nodes.name
+}
+
+#---OIDC provider (needed for IRSA)
+data "tls_certificate" "eks" {
+  url = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+  url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+#---Create Cluster Autoscaler IAM Role (IRSA Role)
+resource "aws_iam_role" "cluster_autoscaler_irsa_role" {
+
+  name = "${var.eks_cluster_name}-cluster-autoscaler"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.eks.arn
       }
-    }
-  }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kube-system:cluster-autoscaler"
+        }
+      }
+    }]
+  })
 }
 
-module "cluster_autoscaler_irsa_role" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.0"
+#---Attach Autoscaler Permissions
+resource "aws_iam_role_policy_attachment" "autoscaler" {
 
-  role_name                        = "cluster-autoscaler"
-  attach_cluster_autoscaler_policy = true
-  cluster_autoscaler_cluster_names = [module.eks.cluster_name]
-
-  oidc_providers = {
-    ex = {
-      provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["kube-system:cluster-autoscaler"]
-    }
-  }
+  role       = aws_iam_role.cluster_autoscaler_irsa_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AutoScalingFullAccess"
 }
+
+#---create eks cluster
+resource "aws_eks_cluster" "main" {
+  name     = var.eks_cluster_name
+  role_arn = aws_iam_role.cluster.arn
+  version  = var.eks_version
+
+  vpc_config {
+    # tells AWS where to place the Elastic Network Interfaces (ENIs) that allow the AWS-managed Control Plane to talk to your VPC 
+    # (gives access to communicate with load balncers in public subnet and cluster nodes in private subnet)
+    subnet_ids = [
+      aws_subnet.private_1.id,
+      aws_subnet.private_2.id,
+      aws_subnet.public_1.id,
+      aws_subnet.public_2.id
+    ]
+  }
+
+  access_config {
+    authentication_mode = "API_AND_CONFIG_MAP"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy
+  ]
+}
+
+#-----create cluster node-group
+
+resource "aws_eks_node_group" "main" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = var.node_group_name
+  node_role_arn   = aws_iam_role.nodes.arn
+
+  # Deploy nodes into private subnets for security
+  subnet_ids = [
+    aws_subnet.private_1.id,
+    aws_subnet.private_2.id
+  ]
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 5
+    min_size     = 2
+  }
+
+  instance_types = [var.instance_types]
+
+  depends_on = [
+    aws_iam_role_policy_attachment.nodes_AmazonEKSWorkerNodePolicy,
+    aws_iam_role_policy_attachment.nodes_AmazonEKS_CNI_Policy,
+    aws_iam_role_policy_attachment.nodes_AmazonEC2ContainerRegistryReadOnly,
+  ]
+}
+
