@@ -56,6 +56,39 @@ resource "aws_iam_openid_connect_provider" "eks" {
 }
 
 #---Create Cluster Autoscaler IAM Role (IRSA Role)
+
+resource "aws_iam_policy" "cluster_autoscaler" {
+  name        = "${var.eks_cluster_name}-cluster-autoscaler-policy"
+  description = "Permissions for Cluster Autoscaler (Fixes 403 DescribeInstanceTypes)"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "autoscaling:DescribeAutoScalingGroups",
+          "autoscaling:DescribeAutoScalingInstances",
+          "autoscaling:DescribeLaunchConfigurations",
+          "autoscaling:DescribeScalingActivities",
+          "autoscaling:DescribeTags",
+          "ec2:DescribeInstanceTypes",      # <--- This was missing from managed policy
+          "ec2:DescribeLaunchTemplateVersions"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "autoscaling:SetDesiredCapacity",
+          "autoscaling:TerminateInstanceInAutoScalingGroup"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "cluster_autoscaler_irsa_role" {
 
   name = "${var.eks_cluster_name}-cluster-autoscaler"
@@ -81,7 +114,7 @@ resource "aws_iam_role" "cluster_autoscaler_irsa_role" {
 resource "aws_iam_role_policy_attachment" "autoscaler" {
 
   role       = aws_iam_role.cluster_autoscaler_irsa_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AutoScalingFullAccess"
+  policy_arn = aws_iam_policy.cluster_autoscaler.arn
 }
 
 #---create eks cluster

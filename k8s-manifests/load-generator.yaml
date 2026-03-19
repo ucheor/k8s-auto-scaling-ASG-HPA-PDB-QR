@@ -6,7 +6,7 @@ metadata:
   labels:
     app: load-generator
 spec:
-  replicas: 2  # 5 parallel load generators
+  replicas: 2  # 2 parallel load generators
   selector:
     matchLabels:
       app: load-generator
@@ -24,7 +24,7 @@ spec:
         - |
           # load generation
           echo "Starting load generator..."
-          # Run 10 parallel wget processes
+          # Run 4 parallel wget processes
           for i in $(seq 1 4); do
             while true; do
               wget -q -O- http://php-apache 2>/dev/null > /dev/null
