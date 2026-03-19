@@ -1,11 +1,11 @@
 variable "eks_cluster_name" {
   type    = string
-  default = "auto_scale"
+  default = "auto_scaler"
 }
 
 variable "node_group_name" {
   type    = string
-  default = "auto_scale-node-group"
+  default = "auto_scaler-node-group"
 }
 
 variable "eks_version" {

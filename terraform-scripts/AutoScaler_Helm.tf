@@ -2,7 +2,10 @@ resource "helm_release" "metrics_server" {
   depends_on = [
     data.aws_eks_cluster.main,
     data.aws_eks_cluster_auth.main,
-    null_resource.wait_for_cluster
+    null_resource.wait_for_cluster,
+    # valid during clean up so roles don't get deleted before the Helm metrics install
+    aws_eks_access_policy_association.github_admin,
+    aws_eks_access_entry.github_actions
   ]
 
   name       = "metrics-server"
@@ -18,8 +21,9 @@ resource "helm_release" "metrics_server" {
 
 resource "helm_release" "cluster_autoscaler" {
 
-  depends_on = [ null_resource.wait_for_cluster ]
-  
+  depends_on = [ null_resource.wait_for_cluster,   
+  ]
+
   name       = "cluster-autoscaler"
   repository = "https://kubernetes.github.io/autoscaler"
   chart      = "cluster-autoscaler"

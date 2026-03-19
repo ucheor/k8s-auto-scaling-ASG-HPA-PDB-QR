@@ -131,6 +131,11 @@ resource "aws_eks_node_group" "main" {
 
   instance_types = [var.instance_types]
 
+  tags = {
+    "k8s.io/cluster-autoscaler/${aws_eks_cluster.main.name}" = "owned"
+    "k8s.io/cluster-autoscaler/enabled" = "true"
+  }
+
   depends_on = [
     aws_iam_role_policy_attachment.nodes_AmazonEKSWorkerNodePolicy,
     aws_iam_role_policy_attachment.nodes_AmazonEKS_CNI_Policy,
