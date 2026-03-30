@@ -10,7 +10,7 @@ Every step below is backed by real terminal output so you can follow along, repr
 
 ## Part 1 — Setting Up the Cluster
 
-**Step 1: Provision the EKS Cluster with Terraform**
+**Step 1: Provision the EKS Cluster with Terraform**  
 We start by provisioning an Amazon EKS cluster using Terraform. The cluster is configured with a Cluster Autoscaler-enabled Auto Scaling Group (ASG) so that Kubernetes can request new EC2 nodes from AWS when pods cannot be scheduled due to insufficient capacity.
 
 ```
@@ -19,8 +19,12 @@ terraform init
 
 ![terraform init](images/01_terraform_init.png)
 
+---
+
+Let's go ahead and provision our kubernetes cluster using Terraform.
+
 ```
-terraform apply #yes to approve
+terraform apply # yes to approve
 ```
 
 ![terraform apply to provision kubernetes cluster](images/02_apply_complete.png)
@@ -29,15 +33,16 @@ terraform apply #yes to approve
 
 
 Once Terraform finishes, we update the local kubeconfig and immediately verify the cluster is healthy:
+
 ```
 aws eks update-kubeconfig --region us-east-1 --name auto_scaler
 kubectl get nodes
 kubectl top nodes
 ```
 
-At this point we have two worker nodes, both Ready, with low resource utilisation. The cluster is empty and waiting for work. 
+At this point we should have two worker nodes, both Ready, with low resource utilisation. The cluster is empty and waiting for workloads. 
 
-The cluster have been configured with Metrics Server, making it possible to get resource utilization information. This will also enables the HPA to work since it needs CPU utilization information to function.
+I have also configured the cluster provisioning to install Metrics Server, making it possible to get resource utilization information. This Metrics Server will also enables the HPA to function by providing CPU utilization information.
  
 ![Two EKS worker nodes are ready and the metrics server](images/03_nodes_and_metrics_active.png)
 
@@ -45,7 +50,14 @@ The Cluster Autoscaler was also installed with Terraform. It watches for pods th
 
 ---
 
-**Step 2: Deploy the Application, Service, and HPA**
+**Step 2: Deploy the Application, Service, and HPA**  
+
+Let's navigate into the Kubernetes manifests folder to start our deployments.
+
+```
+cd k8s-manifests
+```
+
 With the cluster up, we apply three Kubernetes manifests in one go:
 -	php-deployment.yaml — a Deployment running the hpa-example image, requesting 480m CPU per pod
 -	php-service.yaml — a ClusterIP Service that gives the load generator a stable endpoint
@@ -85,30 +97,65 @@ We can see the HPA object alongside the Deployment and ReplicaSet. The HPA was s
 
 ## Part 2 — Generating Load and Watching HPA Scale Up
 
-**Step 4:** Deploy the Load Generator
-To trigger autoscaling we deploy a load-generator: 2 replicas of a BusyBox container, each running 4 parallel wget loops that hammer the php-apache service as fast as possible.
-kubectl apply -f load-generator.yaml
-The load generator creates 4 worker processes per pod × 2 pods = 8 concurrent HTTP request streams hitting the service continuously. This is enough to push CPU well past the 50% threshold almost immediately.
- 
-Image 06 — 06_load_generator_deployed.png: Load generator pods are running alongside the php-apache pods
-Step 5: HPA Detects Overload and Starts Scaling
-Within seconds the HPA metrics server picks up the spike. Because our scaleUp window is only 15 seconds and the policy allows up to 3 new pods every 15 seconds (or 50% of current count, whichever is greater), the HPA reacts quickly.
-Watching the pods in real time:
-kubectl get pods -l run=php-apache -w
-We can see pods transitioning from Pending → ContainerCreating → Running in rapid succession. The HPA replica count moves from 2 to 5, 7, 11, then up to 14 or 15.
- 
-Image 07 — 07_scaling_started.png: HPA driving pod count from 2 up toward 15 as CPU soars above 100% of the 50% target
-Step 6: Cluster Autoscaler Provisions New Nodes
-The two original nodes only have 2 CPU cores each. With 480m requested per pod, they can host roughly 4 pods each. As the HPA tries to schedule 10–15 pods, many of them land in Pending state because there is no room.
-This is the signal the Cluster Autoscaler waits for: it detects unschedulable pods and instructs the ASG to launch new EC2 instances.
- 
-Image 08 — 08_nodes_scaled_up.png: New nodes joining the cluster — kubectl get nodes -w shows them transitioning from NotReady to Ready
- 
-Image 09 — 09_ASG-scaling.png: The AWS Auto Scaling Group in the console confirms new instances are being launched
-💡 How the Cluster Autoscaler decides: It checks every 10 seconds. If it sees pods that have been Pending for over 3 minutes due to insufficient resources, it calculates how many new nodes are needed and triggers an ASG scale-out. It will not add more nodes than the ASG maximum.
+**Step 4: Deploy the Load Generator**  
 
-Part 3 — Removing Load and Watching Scale Down
-Step 7: Delete the Load Generator
+To trigger autoscaling we deploy a load-generator: 2 replicas of a BusyBox container, each running 4 parallel wget loops that hammer the php-apache service as fast as possible.
+
+```
+kubectl apply -f load-generator.yaml
+```
+
+The load generator application creates 4 worker processes per pod × 2 pods = 8 concurrent HTTP request streams hitting the service continuously. This is enough to push CPU well past the 50% threshold almost immediately. The plan is to emulate increase traffic to our application, leading to higher CPU utilization. Once the CPU utilization goes reaches 50%, the HPA should become active and start scaling the pods to accomodate the increased traffic. 
+
+![Load generator pods are running alongside the php-apache pods](images/06_load_generator_deployed.png)
+
+Once our current nodes get to maximum capacity, they will be unable to accomodate more pods. The waiting pods remain in pending state because there is no space in the cluster to accomodate them. This is where the Cluster Autoscaler comes in. Once the autoscaler notices, the pending pods, it triggers the creation of additional nodes in AWS so that the Pending pods can finally be scheduled in the new cluster nodes. 
+
+**Note:** The Cluster Autoscaler will still respect the min and max node specifications for your node group. 
+
+![eks node group min and max](images/extra_01_eks_node_group_scaling_config.png)
+
+---
+  
+**Step 5: HPA Detects Overload and Starts Scaling**  
+
+Within seconds of deployoing the load-generator deployment, the HPA metrics server picks up the spike. Because our scaleUp window is only 15 seconds and the policy allows up to 3 new pods every 15 seconds (or 50% of current count, whichever is greater), the HPA reacts quickly.
+We can watch the pods in real time:
+
+```
+kubectl get pods -l run=php-apache -w
+```
+
+The pods are transitioning from Pending → ContainerCreating → Running in rapidly moving the replica count up to 15. 
+ 
+![HPA is active and scaling the application](images/07_scaling_started.png)
+
+---
+
+**Step 6: Cluster Autoscaler Provisions New Nodes**  
+
+The two original nodes only have 2 CPU cores each. With 480m requested per pod, they can host roughly 4 pods each. As the HPA tries to schedule 10–15 pods, many of them land in Pending state because there is no room. This is the signal the Cluster Autoscaler waits for: it detects unschedulable pods and instructs the ASG to launch new EC2 instances. The new nodes join the cluster and go from **Not Ready** to **Ready** to accept new pods.
+ 
+![New nodes joining the cluster](images/08_nodes_scaled_up.png)
+
+```
+kubectl get nodes -w
+```
+
+We can confirm that new nodes are joining the cluster so they can accomodate the previously pending pods. 
+
+![New instances are provisioned and Ready](images/09_ASG-scaling.png)
+
+
+# How the Cluster Autoscaler decides:   
+In our configuration *php-hpa.yaml*, it checks every 10 seconds. If it sees pods that have been Pending for over 3 minutes due to insufficient resources, it calculates how many new nodes are needed and triggers an ASG scale-out. It will not add more nodes than the ASG maximum stated on the node group configuration.
+
+---
+
+## Part 3 — Removing Load and Watching Scale Down  
+
+**Step 7: Delete the Load Generator - Scaling Down**
+
 Once we have demonstrated scale-out, we remove the load generator to let the system relax:
 kubectl delete -f load-generator.yaml
  
@@ -187,9 +234,12 @@ kubectl delete deployment.apps/php-apache
 kubectl delete pdb php-apache-pdb
 cd ../terraform-scripts && terraform destroy
  
-Image 22 — 22_clean_up.png: Deployment and PDB deleted; terraform destroy initiated to tear down the EKS cluster and all associated AWS resources
+Image 22 — 22_clean_up.png: Deployment and PDB deleted; 
 
-Summary: Three Layers of Kubernetes Auto-Scaling
+Use terraform destroy to tear down the EKS cluster and all associated AWS resources.
+
+## Summary: Three Layers of Kubernetes Auto-Scaling
+
 This walkthrough demonstrated how three Kubernetes features work together to create a self-healing, cost-efficient cluster:
 Horizontal Pod Autoscaler (HPA)
 •	Watches CPU (or custom metrics) against a target utilisation
