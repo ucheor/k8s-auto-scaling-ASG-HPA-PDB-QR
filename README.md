@@ -101,7 +101,9 @@ The asymmetry is deliberate: I have structured the HPA to scale up the replicas 
 **Step 3: Confirm the HPA Is Active**  
 
 After applying the manifests, we confirm the HPA is reporting correctly:
+```
 kubectl get all
+```
 We can see the HPA object alongside the Deployment and ReplicaSet. The HPA was set up to scale up the replicas if the CPU utilization gets to 50%. CPU is currently 0%/50%, meaning no load yet. The HPA is idle at 2 replicas (its minimum).
  
 ![HPA active with 2/2 replicas and 0% CPU utilisation](images/05_hpa_active.png)
