@@ -1,4 +1,4 @@
-# Kubernetes Auto-Scaling in Practice - A Complete Walkthrough: HPA, PDB, and Cluster Autoscaler
+# Kubernetes Auto-Scaling - Horizontal Pod Autoscaler (HPA), Cluster Autoscaler (CA) & Pod Disruption Budget (PDB) A Complete Walkthrough
 
 ## Introduction
 
@@ -54,7 +54,7 @@ kubectl get nodes
 kubectl top nodes
 ```
 
-At this point we should have two worker nodes, both Ready, with low resource utilisation. The cluster is empty and waiting for workloads. 
+At this point we should have two worker nodes, both Ready, with low resource utilization. The cluster is empty and waiting for workloads. 
 
 I have configured the terraform script cluster provisioning to install Metrics Server, making it possible to get resource utilization information. This Metrics Server will also enables the HPA to function by providing CPU utilization information.
  
@@ -98,7 +98,8 @@ The asymmetry is deliberate: I have structured the HPA to scale up the replicas 
  
 ---
 
-**Step 3: Confirm the HPA Is Active**
+**Step 3: Confirm the HPA Is Active**  
+
 After applying the manifests, we confirm the HPA is reporting correctly:
 kubectl get all
 We can see the HPA object alongside the Deployment and ReplicaSet. The HPA was set up to scale up the replicas if the CPU utilization gets to 50%. CPU is currently 0%/50%, meaning no load yet. The HPA is idle at 2 replicas (its minimum).
@@ -119,11 +120,11 @@ To trigger autoscaling we deploy a load-generator: 2 replicas of a BusyBox conta
 kubectl apply -f load-generator.yaml
 ```
 
-The load generator application creates 4 worker processes per pod × 2 pods = 8 concurrent HTTP request streams hitting the service continuously. This is enough to push CPU well past the 50% threshold almost immediately. The plan is to emulate increased load on our application, leading to higher CPU utilization. Once the CPU utilization goes reaches 50%, the HPA should become active and start scaling the pods to accomodate the increased load. 
+The load generator application creates 4 worker processes per pod × 2 pods = 8 concurrent HTTP request streams hitting the service continuously. This is enough to push CPU well past the 50% threshold almost immediately. The plan is to emulate increased load on our application, leading to higher CPU utilization. Once the CPU utilization goes reaches 50%, the HPA should become active and start scaling the pods to accommodate the increased load. 
 
 ![Load generator pods are running alongside the php-apache pods](images/06_load_generator_deployed.png)
 
-Once our current nodes get to maximum capacity, they will be unable to accomodate more pods. The waiting pods remain in pending state because there is no space in the cluster to accomodate them. This is where the Cluster Autoscaler comes in. Once the autoscaler notices, the pending pods, it triggers the creation of additional nodes in AWS so that the Pending pods can finally be scheduled in the new cluster nodes. 
+Once our current nodes get to maximum capacity, they will be unable to accommodate more pods. The waiting pods remain in pending state because there is no space in the cluster to accommodate them. This is where the Cluster Autoscaler comes in. Once the autoscaler notices, the pending pods, it triggers the creation of additional nodes in AWS so that the Pending pods can finally be scheduled in the new cluster nodes. 
 
 **Note:** The Cluster Autoscaler will still respect the min and max node specifications for your node group. 
 
@@ -156,7 +157,7 @@ The two original nodes we set up only have 2 CPU cores each. With 480m requested
 kubectl get nodes -w
 ```
 
-We can confirm that new nodes are joining the cluster so they can accomodate the previously pending pods. Note the age of the new nodes.
+We can confirm that new nodes are joining the cluster so they can accommodate the previously pending pods. Note the age of the new nodes.
 
 ![New instances are provisioned and Ready](images/09_ASG-scaling.png)
 
@@ -196,7 +197,7 @@ kubectl get hpa -w
 
 **Step 9: Cluster Autoscaler Scales Down Nodes**  
 
-Once the pod count drops, nodes have spare capacity. After a cool-down period (default 10 minutes of underutilisation), the Cluster Autoscaler cordons and drains excess nodes (NotReady, SchedulingDisabled) and terminates the underlying AWS EC2 instances. The cluster returns to fewer nodes in the absence of the extra load.
+Once the pod count drops, nodes have spare capacity. After a cool-down period (default 10 minutes of underutilization), the Cluster Autoscaler cordons and drains excess nodes (NotReady, SchedulingDisabled) and terminates the underlying AWS EC2 instances. The cluster returns to fewer nodes in the absence of the extra load.
 
 ![nodes are scaled down](images/12_nodes_left.png)
  
@@ -234,7 +235,7 @@ kubectl get pods -w
  
 ![scaling below HPA minimum](images/15_scale_down_to_1_with_hpa_2.png)
 
-**Key takeaway:** The HPA owns the replica count. If you manually set replicas below the minimum, the HPA corrects it within the next reconciliation loop (typically within 15–30 seconds). Manual scaling is useful for one-off adjustments but the HPA always has the final say. Thus, while 
+**Key takeaway:** The HPA owns the replica count. If you manually set replicas below the minimum, the HPA corrects it within the next reconciliation loop (typically within 15–30 seconds). Manual scaling is useful for one-off adjustments but the HPA always has the final say.
 
 ---
 
@@ -341,7 +342,7 @@ kubectl get nodes -w
  
 ---
 
-**Step 15: System Stabilises **  
+**Step 15: System Stabilises**  
 
 After uncordoning the surviving nodes and allowing the Cluster Autoscaler to reclaim the extras nodes, the cluster settles back to a healthy state with all pods distributed across available nodes. 
  
@@ -366,7 +367,7 @@ cd ../terraform-scripts && terraform destroy
 
 ![clean up AWS resources](images/22_clean_up.png)
 
-Use terraform destroy to tear down the EKS cluster and all associated AWS resources.
+When done with your demo, use terraform destroy to tear down the EKS cluster and all associated AWS resources.
 
 ## Summary: Three Layers of Kubernetes Auto-Scaling
 
@@ -384,7 +385,7 @@ This walkthrough demonstrated how three Kubernetes features work together to cre
 
 **Cluster Autoscaler (CA)**  
 -	Adds nodes when pods are Pending due to insufficient capacity
--	Removes underutilised nodes after a cooldown period
+-	Removes underutilized nodes after a cooldown period
 -	Respects PDBs and pod anti-affinity rules before draining a node  
 
 Used together, these three mechanisms mean your application can handle sudden traffic spikes without manual intervention, and your infrastructure costs track actual usage rather than worst-case provisioning.
