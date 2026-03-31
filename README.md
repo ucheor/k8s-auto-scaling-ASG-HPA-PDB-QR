@@ -342,7 +342,7 @@ kubectl get nodes -w
  
 ---
 
-**Step 15: System Stabilises**  
+**Step 15: System Stabilizes**  
 
 After uncordoning the surviving nodes and allowing the Cluster Autoscaler to reclaim the extras nodes, the cluster settles back to a healthy state with all pods distributed across available nodes. 
  
