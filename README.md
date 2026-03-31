@@ -46,7 +46,7 @@ terraform apply # yes to approve
 ---
 
 
-Once Terraform finishes, we update the local kubeconfig and immediately verify the cluster is healthy:
+Once Terraform finishes with cluster provisioning, we update the local kubeconfig and verify that the cluster is healthy:
 
 ```
 aws eks update-kubeconfig --region us-east-1 --name auto_scaler
@@ -56,7 +56,7 @@ kubectl top nodes
 
 At this point we should have two worker nodes, both Ready, with low resource utilisation. The cluster is empty and waiting for workloads. 
 
-I have also configured the cluster provisioning to install Metrics Server, making it possible to get resource utilization information. This Metrics Server will also enables the HPA to function by providing CPU utilization information.
+I have configured the terraform script cluster provisioning to install Metrics Server, making it possible to get resource utilization information. This Metrics Server will also enables the HPA to function by providing CPU utilization information.
  
 ![Two EKS worker nodes are ready and the metrics server](images/03_nodes_and_metrics_active.png)
 
@@ -148,7 +148,7 @@ The pods are transitioning from Pending → ContainerCreating → Running in rap
 
 **Step 6: Cluster Autoscaler Provisions New Nodes**  
 
-The two original nodes only have 2 CPU cores each. With 480m requested per pod, they can host roughly 4 pods each. As the HPA tries to schedule 10–15 pods, many of them land in Pending state because there is no room. This is the signal the Cluster Autoscaler waits for: it detects unschedulable pods and instructs the ASG to launch new EC2 instances. The new nodes join the cluster and go from **Not Ready** to **Ready** to accept new pods.
+The two original nodes we set up only have 2 CPU cores each. With 480m requested per pod, they can host roughly 4 pods each. As the HPA tries to schedule 10–15 pods, many of them land in Pending state because there is no room. This is the signal the Cluster Autoscaler waits for: it detects unschedulable pods and instructs the ASG to launch new EC2 instances. The new nodes join the cluster and go from **Not Ready** to **Ready** to accept new pods.
  
 ![New nodes joining the cluster](images/08_nodes_scaled_up.png)
 
@@ -156,12 +156,13 @@ The two original nodes only have 2 CPU cores each. With 480m requested per pod, 
 kubectl get nodes -w
 ```
 
-We can confirm that new nodes are joining the cluster so they can accomodate the previously pending pods. 
+We can confirm that new nodes are joining the cluster so they can accomodate the previously pending pods. Note the age of the new nodes.
 
 ![New instances are provisioned and Ready](images/09_ASG-scaling.png)
 
 
-## How the Cluster Autoscaler decides:   
+**How the Cluster Autoscaler decides:**   
+
 In our configuration *php-hpa.yaml*, it checks every 10 seconds. If it sees pods that have been Pending for over 3 minutes due to insufficient resources, it calculates how many new nodes are needed and triggers an ASG scale-out. It will not add more nodes than the ASG maximum stated on the node group configuration.
 
 ---
@@ -285,7 +286,7 @@ We should now have all our 5 pods running, distributed across the two available 
 
 **Step 12: Drain a Node and Watch the PDB Enforce Its Budget**  
 
-Now we trigger a voluntary disruption. We cordon one node (preventing new pods from landing on it) and then drain another — which evicts all pods on that node and reschedules them elsewhere. 
+Now we trigger a voluntary disruption. We cordon one node (preventing new pods from being scheduled on it) and then drain the other node — which evicts all pods on that node and reschedules them elsewhere. 
 
 ```
 kubectl get nodes
@@ -295,7 +296,7 @@ Note the name of both nodes. In our case we have 3 pods on *ip-10-0-4-159.ec2.in
 
 ---
 
-Let's cordon off the node with 2 pods so they are unable to accept more and try to drain the node with 3 pods. Our excpectation is that since the pod disruption budget is 3, evicting all the 3 pods will casue an issue since that will only leave 2 pods running.
+Let's cordon off the node with 2 pods so it is unable to accept more pods and try to drain the node with 3 pods. Our expectation is that since the pod disruption budget is 3, evicting all the 3 pods will casue an issue since that will only leave 2 pods running.
 
 ```
 kubectl cordon *ip-10-0-3-92.ec2.internal*  # update with your node name
@@ -322,31 +323,38 @@ Without a PDB, all pods on the drained node would be terminated simultaneously. 
 
 **Step 13: Cluster Autoscaler Kicks In During Drain**  
 
-As pods get evicted from the drained node, they must be rescheduled. But we also cordoned the other original node, so there is no room on the remaining nodes. The Cluster Autoscaler detects the Pending pods and provisions a new node.
+As pods get evicted from the drained node, they must be rescheduled. But we also cordoned the other original node, so there is no room on the remaining nodes. The Cluster Autoscaler detects the Pending pods and provisions a new node. The new nodes join the cluster to absorb the pods displaced by the drain. 
  
-Image 19 — 19_auto-scaler_kicks_in.png: New node joining the cluster to absorb pods displaced by the drain; kubectl uncordon restores the surviving nodes once the drain completes
+![node autoscaler kicks in](images/19_auto-scaler_kicks_in.png)
 
 ---
 
-**Step 14: Extra Nodes Scale Down After Drain Completes ** 
+**Step 14: Extra Nodes Scale Down After Drain Completes** 
 
-Once the drain is finished and all pods are Running on healthy nodes, the cordoned and drained nodes have no workload. The Cluster Autoscaler marks them for termination and removes them after the cooldown.
+Once the drain is finished and all pods are Running on healthy nodes, the drained node will have no pods. The Cluster Autoscaler marks all provisioned idle nodes for termination and removes them after the cooldown. We can view them moving through SchedulingDisabled → NotReady → Gone.
+
+```
+kubectl get nodes -w
+```
+
+![extra nodes getting removed](images/20_extra_nodes_scaling_down.png)
  
-Image 20 — 20_extra_nodes_scaling_down.png: Excess nodes removed by the Cluster Autoscaler after drain; kubectl get nodes -w shows them moving through SchedulingDisabled → NotReady → gone
+---
 
 **Step 15: System Stabilises **  
 
-After uncordoning the surviving nodes and allowing the Cluster Autoscaler to reclaim the extras, the cluster settles back to a healthy state with all pods distributed across available nodes.
+After uncordoning the surviving nodes and allowing the Cluster Autoscaler to reclaim the extras nodes, the cluster settles back to a healthy state with all pods distributed across available nodes. 
  
 ![cluster stable](images/21_system_stable.png)
 
-Cluster is stable with 5 pods running on 2 nodes after the drain cycle completes
+Cluster is stable with 5 pods running on 2 nodes after the drain cycle completes. The Pod Disruption Budget ensured that there were a minimum of 3 pods in the cluster during voluntary pod deletion.
 
 ---
 
 ## Part 6 — Clean Up
 
-With the demo complete, we clean up all resources to avoid incurring AWS charges:
+With the demo complete, we can go ahead and clean up all resources to avoid incurring AWS charges:
+
 ```
 kubectl delete deployment.apps/php-apache
 kubectl delete pdb php-apache-pdb
@@ -379,5 +387,9 @@ This walkthrough demonstrated how three Kubernetes features work together to cre
 
 Used together, these three mechanisms mean your application can handle sudden traffic spikes without manual intervention, and your infrastructure costs track actual usage rather than worst-case provisioning.
 
+
+#Kubernetes #AWS #Terraform #InfrastructureAsCode #DevOps #EKS #Microservices #AutoScaling
+
 ---
 
+*If this guide was of interest, feel free to connect or share. What has been your experience setting up auto-scaling for your resources, what issues do you run into and how do you resolve them?*
